@@ -682,36 +682,70 @@ with tab0:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TAB 1 — 종목 검색
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 한국 주요 종목 사전 (네이버 API 실패 시 fallback)
+KR_STOCK_DICT = {
+    "삼성전자": ("005930.KS", "KOSPI"), "삼성전자우": ("005935.KS", "KOSPI"),
+    "SK하이닉스": ("000660.KS", "KOSPI"), "LG에너지솔루션": ("373220.KS", "KOSPI"),
+    "삼성바이오로직스": ("207940.KS", "KOSPI"), "현대차": ("005380.KS", "KOSPI"),
+    "기아": ("000270.KS", "KOSPI"), "셀트리온": ("068270.KS", "KOSPI"),
+    "POSCO홀딩스": ("005490.KS", "KOSPI"), "KB금융": ("105560.KS", "KOSPI"),
+    "신한지주": ("055550.KS", "KOSPI"), "하나금융지주": ("086790.KS", "KOSPI"),
+    "LG화학": ("051910.KS", "KOSPI"), "카카오": ("035720.KS", "KOSPI"),
+    "NAVER": ("035420.KS", "KOSPI"), "삼성SDI": ("006400.KS", "KOSPI"),
+    "현대모비스": ("012330.KS", "KOSPI"), "LG전자": ("066570.KS", "KOSPI"),
+    "삼성물산": ("028260.KS", "KOSPI"), "SK텔레콤": ("017670.KS", "KOSPI"),
+    "KT": ("030200.KS", "KOSPI"), "LG": ("003550.KS", "KOSPI"),
+    "SK": ("034730.KS", "KOSPI"), "롯데케미칼": ("011170.KS", "KOSPI"),
+    "한국전력": ("015760.KS", "KOSPI"), "삼성생명": ("032830.KS", "KOSPI"),
+    "고려아연": ("010130.KS", "KOSPI"), "아모레퍼시픽": ("090430.KS", "KOSPI"),
+    "한화에어로스페이스": ("012450.KS", "KOSPI"), "두산에너빌리티": ("034020.KS", "KOSPI"),
+    "카카오뱅크": ("323410.KS", "KOSPI"), "크래프톤": ("259960.KS", "KOSPI"),
+    "에코프로비엠": ("247540.KQ", "KOSDAQ"), "에코프로": ("086520.KQ", "KOSDAQ"),
+    "셀트리온헬스케어": ("091990.KQ", "KOSDAQ"), "알테오젠": ("196170.KQ", "KOSDAQ"),
+    "HLB": ("028300.KQ", "KOSDAQ"), "리노공업": ("058470.KQ", "KOSDAQ"),
+    "펄어비스": ("263750.KQ", "KOSDAQ"), "카카오게임즈": ("293490.KQ", "KOSDAQ"),
+    "엔씨소프트": ("036570.KQ", "KOSDAQ"), "넷마블": ("251270.KQ", "KOSDAQ"),
+}
+
 @st.cache_data(ttl=60)
 def search_ticker(query: str):
-    """종목명 또는 티커로 후보 목록 반환 (한글: 네이버금융 / 영문: yfinance)"""
+    """종목명 또는 티커로 후보 목록 반환 (한글: 네이버금융 + fallback / 영문: yfinance)"""
     has_korean = any("가" <= c <= "힣" for c in query)
     candidates = []
 
     if has_korean:
-        # 네이버 금융 자동완성 API
+        # 1) 네이버 금융 자동완성 API 시도
         try:
             url = f"https://ac.stock.naver.com/ac?q={requests.utils.quote(query)}&target=index,stock,etf"
-            headers = {"User-Agent": "Mozilla/5.0"}
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             r = requests.get(url, headers=headers, timeout=5)
             data = r.json()
-            for item in data.get("items", [])[:8]:
-                for entry in item:
-                    code = entry.get("code", "")
-                    name = entry.get("name", "")
-                    type_ = entry.get("type", "")
-                    if not code or not name:
-                        continue
-                    # 한국 주식: 숫자 코드 → .KS 붙이기
-                    if code.isdigit():
-                        symbol = code + ".KS"
-                        exch = "KRX"
-                    else:
-                        symbol = code
-                        exch = type_
-                    candidates.append({"symbol": symbol, "name": name, "exchange": exch})
+            items = data.get("items", [])
+            # items는 [[{...}, {...}], [...]] 형태 (카테고리별 리스트)
+            for category in items:
+                if isinstance(category, list):
+                    for entry in category:
+                        code = entry.get("code", "")
+                        name = entry.get("name", "")
+                        if not code or not name:
+                            continue
+                        symbol = (code + ".KS") if code.isdigit() and len(code) == 6 else code
+                        candidates.append({"symbol": symbol, "name": name, "exchange": "KRX"})
+                elif isinstance(category, dict):
+                    code = category.get("code", "")
+                    name = category.get("name", "")
+                    if code and name:
+                        symbol = (code + ".KS") if code.isdigit() and len(code) == 6 else code
+                        candidates.append({"symbol": symbol, "name": name, "exchange": "KRX"})
         except Exception:
             pass
+
+        # 2) 네이버 API 결과 없으면 내장 사전에서 검색
+        if not candidates:
+            for name, (sym, exch) in KR_STOCK_DICT.items():
+                if query in name:
+                    candidates.append({"symbol": sym, "name": name, "exchange": exch})
+
     else:
         # 영문 종목명/티커 → yfinance Search
         try:
@@ -726,7 +760,7 @@ def search_ticker(query: str):
         except Exception:
             pass
 
-    return candidates
+    return candidates[:8]
 
 with tab1:
     st.header("종목 검색 & 차트")
