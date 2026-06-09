@@ -682,20 +682,75 @@ with tab0:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # TAB 1 — 종목 검색
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+@st.cache_data(ttl=60)
+def search_ticker(query: str):
+    """종목명 또는 티커로 후보 목록 반환"""
+    try:
+        results = yf.Search(query, max_results=8).quotes
+        candidates = []
+        for r in results:
+            sym = r.get("symbol", "")
+            name = r.get("longname") or r.get("shortname") or sym
+            exch = r.get("exchDisp", "")
+            type_ = r.get("quoteType", "")
+            if type_ in ("EQUITY", "ETF", "INDEX"):
+                candidates.append({"symbol": sym, "name": name, "exchange": exch, "type": type_})
+        return candidates
+    except Exception:
+        return []
+
 with tab1:
     st.header("종목 검색 & 차트")
     col1, col2 = st.columns([2, 1])
     with col1:
         raw_input = st.text_input(
-            "종목 코드 입력",
-            placeholder="한국: 005930 / 미국: AAPL, TSLA",
-            help="한국 주식은 숫자 6자리, 미국 주식은 영문 티커",
+            "종목 코드 또는 종목명 입력",
+            placeholder="예) 삼성전자 / 005930 / Apple / AAPL",
+            help="한글 종목명, 영문 회사명, 또는 티커 코드로 검색 가능",
         )
     with col2:
         period = st.selectbox("기간", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)
 
+    # 선택된 티커를 세션에 유지
+    if "selected_symbol" not in st.session_state:
+        st.session_state.selected_symbol = None
+    if raw_input != st.session_state.get("last_search_input", ""):
+        st.session_state.selected_symbol = None
+    st.session_state.last_search_input = raw_input
+
     if raw_input:
-        symbol = get_ticker(raw_input)
+        # 티커 코드 직접 입력 여부 판단 (숫자 6자리 or 순수 영문 티커)
+        is_direct = raw_input.strip().replace(".", "").isalnum() and not any(
+            "가" <= c <= "힣" for c in raw_input
+        )
+
+        if is_direct:
+            symbol = get_ticker(raw_input.strip().upper())
+        else:
+            # 종목명 검색 → 후보 선택
+            with st.spinner("종목 검색 중..."):
+                candidates = search_ticker(raw_input.strip())
+
+            if not candidates:
+                st.warning("검색 결과가 없습니다. 티커 코드로 직접 입력해보세요.")
+                symbol = None
+            elif st.session_state.selected_symbol is None:
+                st.markdown("**검색 결과** — 아래에서 종목을 선택하세요")
+                for i, c in enumerate(candidates):
+                    label = f"{c['name']}  `{c['symbol']}`  ({c['exchange']})"
+                    if st.button(label, key=f"cand_{i}"):
+                        st.session_state.selected_symbol = c["symbol"]
+                        st.rerun()
+                symbol = None
+            else:
+                symbol = st.session_state.selected_symbol
+                if st.button("🔄 다시 검색", key="reset_search"):
+                    st.session_state.selected_symbol = None
+                    st.rerun()
+    else:
+        symbol = None
+
+    if symbol:
         with st.spinner(f"{symbol} 데이터 불러오는 중..."):
             price, currency = fetch_price(symbol)
             hist = fetch_history(symbol, period)
