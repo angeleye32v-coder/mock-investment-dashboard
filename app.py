@@ -88,15 +88,23 @@ tab_mkt, tab0, tab1, tab2, tab3, tab4 = st.tabs(["📈 시장 현황", "🧭 투
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @st.cache_data(ttl=300)
 def fetch_fear_and_greed():
+    urls = [
+        "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+        "https://fear-and-greed-index.p.rapidapi.com/v1/fgi",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+    }
     try:
-        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=8)
+        r = requests.get(urls[0], headers=headers, timeout=10)
+        r.raise_for_status()
         data = r.json()
-        score = round(data["fear_and_greed"]["score"], 1)
+        score = round(float(data["fear_and_greed"]["score"]), 1)
         rating = data["fear_and_greed"]["rating"]
         return score, rating
-    except Exception:
+    except Exception as e:
         return None, None
 
 @st.cache_data(ttl=600)
@@ -281,31 +289,63 @@ with tab_mkt:
     # 뷰 1: 오늘 현황 테이블
     # ════════════════════════════════════════
     if view == "오늘 현황":
+        # 어제 데이터 찾기 (히스토리에서 오늘 제외 가장 최근 날짜)
+        past_dates = sorted([d for d in hist_data.keys() if d < today_str], reverse=True)
+        yesterday_snap = hist_data.get(past_dates[0]) if past_dates else {}
+
         rows_today = []
         for name in INDICATOR_ORDER:
             if name in current_snap:
                 s = current_snap[name]
+                # 전일 대비 계산
+                chg_str = "-"
+                if yesterday_snap and name in yesterday_snap:
+                    try:
+                        today_raw_str = s["display"].replace("₩","").replace("$","").replace(",","").replace("%","").split("(")[0].strip()
+                        yest_raw_str  = yesterday_snap[name]["display"].replace("₩","").replace("$","").replace(",","").replace("%","").split("(")[0].strip()
+                        today_val = float(today_raw_str)
+                        yest_val  = float(yest_raw_str)
+                        if yest_val != 0:
+                            chg_pct = (today_val - yest_val) / yest_val * 100
+                            arrow = "▲" if chg_pct >= 0 else "▼"
+                            chg_str = f"{arrow} {abs(chg_pct):.2f}%"
+                    except Exception:
+                        chg_str = "-"
+
                 rows_today.append({
                     "지표": name,
                     "현재가 (종가)": s["display"],
+                    "전일 대비": chg_str,
                     "_up": s["up"],
+                    "_chg_up": chg_str.startswith("▲") if chg_str != "-" else s["up"],
                 })
 
         df_today = pd.DataFrame(rows_today)
+        df_show = df_today[["지표", "현재가 (종가)", "전일 대비"]].copy()
 
         def color_today(df):
             styles = []
-            for _, row in df.iterrows():
+            for i, row in df.iterrows():
+                up = df_today.loc[i, "_up"]
                 if "조회 실패" in str(row["현재가 (종가)"]):
-                    styles.append(["background-color:#fff3cd", "background-color:#fff3cd"])
+                    styles.append(["background-color:#fff3cd"] * 3)
                 else:
-                    c = "#e8f5e9" if row["_up"] else "#fdecea"
-                    styles.append([f"background-color:{c}", f"background-color:{c}"])
-            return pd.DataFrame(styles, columns=df.columns)
+                    c = "#fdecea" if up else "#e3f2fd"
+                    chg_up = df_today.loc[i, "_chg_up"]
+                    chg_c = "#fdecea" if chg_up else "#e3f2fd"
+                    styles.append([f"background-color:{c}", f"background-color:{c}", f"background-color:{chg_c}"])
+            return pd.DataFrame(styles, columns=df.columns, index=df.index)
 
-        df_show = df_today[["지표", "현재가 (종가)"]].copy()
+        def color_chg_text(val):
+            if "▲" in str(val):
+                return "color:#c0392b; font-weight:bold"
+            elif "▼" in str(val):
+                return "color:#1565c0; font-weight:bold"
+            return ""
+
         styled_today = df_show.style.apply(
-            lambda _: color_today(df_today), axis=None
+            lambda _: color_today(df_show), axis=None
+        ).map(color_chg_text, subset=["전일 대비"]
         ).set_properties(**{"font-weight": "bold"}, subset=["지표"])
 
         st.dataframe(styled_today, use_container_width=True, hide_index=True, height=520)
@@ -511,6 +551,28 @@ with tab0:
 | VIX 2배 인버스 매수 | VIX는 단순 하락이 아닌 변동성 확대 시 상승 |
 | 덜 오른 섹터 무작정 추격 | 기회비용 낭비, 주도 섹터 이탈 위험 |
 """)
+
+    st.divider()
+
+    # ── 섹션 2-5: 멘토 명언 ──
+    st.subheader("💬 멘토의 한마디")
+    quotes = [
+        ("오늘만큼 좋은 시장은 없다라고 생각될 때, 3일을 기다려라", "🕐"),
+        ("3일이 계속 올라가도 3일 동안 리스크를 없앤다고 생각해야 한다", "📉"),
+        ("쉬는 것도 투자다", "💤"),
+    ]
+    q_cols = st.columns(3)
+    for col, (quote, icon) in zip(q_cols, quotes):
+        col.markdown(
+            f"""<div style="background:linear-gradient(135deg,#1f77b4,#2ca02c);
+            padding:20px;border-radius:10px;text-align:center;height:120px;
+            display:flex;flex-direction:column;justify-content:center">
+            <div style="font-size:2rem">{icon}</div>
+            <div style="color:white;font-size:0.95rem;font-weight:600;margin-top:8px;line-height:1.4">
+            "{quote}"</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
 
     st.divider()
 
