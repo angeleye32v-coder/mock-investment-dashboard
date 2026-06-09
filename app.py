@@ -289,35 +289,46 @@ with tab_mkt:
     # 뷰 1: 오늘 현황 테이블
     # ════════════════════════════════════════
     if view == "오늘 현황":
-        # 어제 데이터 찾기 (히스토리에서 오늘 제외 가장 최근 날짜)
-        past_dates = sorted([d for d in hist_data.keys() if d < today_str], reverse=True)
-        yesterday_snap = hist_data.get(past_dates[0]) if past_dates else {}
+        # mkt_rows에서 yfinance 기반 전일 대비 값 인덱싱
+        mkt_map = {r["지표"]: r for r in mkt_rows}
 
         rows_today = []
         for name in INDICATOR_ORDER:
             if name in current_snap:
                 s = current_snap[name]
-                # 전일 대비 계산
+                # yfinance로 계산된 전일 대비 우선 사용
                 chg_str = "-"
-                if yesterday_snap and name in yesterday_snap:
-                    try:
-                        today_raw_str = s["display"].replace("₩","").replace("$","").replace(",","").replace("%","").split("(")[0].strip()
-                        yest_raw_str  = yesterday_snap[name]["display"].replace("₩","").replace("$","").replace(",","").replace("%","").split("(")[0].strip()
-                        today_val = float(today_raw_str)
-                        yest_val  = float(yest_raw_str)
-                        if yest_val != 0:
-                            chg_pct = (today_val - yest_val) / yest_val * 100
-                            arrow = "▲" if chg_pct >= 0 else "▼"
-                            chg_str = f"{arrow} {abs(chg_pct):.2f}%"
-                    except Exception:
-                        chg_str = "-"
+                chg_up = s["up"]
+                if name in mkt_map and mkt_map[name]["전일 대비"] != "-":
+                    raw_chg = mkt_map[name]["전일 대비"]
+                    chg_pct = mkt_map[name]["등락률"]
+                    arrow = "▲" if chg_pct >= 0 else "▼"
+                    chg_str = f"{arrow} {raw_chg} ({abs(chg_pct):.2f}%)"
+                    chg_up = chg_pct >= 0
+                else:
+                    # 채권 등 mkt_rows에 없는 항목은 히스토리 fallback
+                    past_dates = sorted([d for d in hist_data.keys() if d < today_str], reverse=True)
+                    yesterday_snap = hist_data.get(past_dates[0]) if past_dates else {}
+                    if yesterday_snap and name in yesterday_snap:
+                        try:
+                            today_raw_str = s["display"].replace("₩","").replace("$","").replace(",","").replace("%","").split("(")[0].strip()
+                            yest_raw_str  = yesterday_snap[name]["display"].replace("₩","").replace("$","").replace(",","").replace("%","").split("(")[0].strip()
+                            today_val = float(today_raw_str)
+                            yest_val  = float(yest_raw_str)
+                            if yest_val != 0:
+                                chg_pct = (today_val - yest_val) / yest_val * 100
+                                arrow = "▲" if chg_pct >= 0 else "▼"
+                                chg_str = f"{arrow} {abs(chg_pct):.2f}%"
+                                chg_up = chg_pct >= 0
+                        except Exception:
+                            chg_str = "-"
 
                 rows_today.append({
                     "지표": name,
                     "현재가 (종가)": s["display"],
                     "전일 대비": chg_str,
                     "_up": s["up"],
-                    "_chg_up": chg_str.startswith("▲") if chg_str != "-" else s["up"],
+                    "_chg_up": chg_up,
                 })
 
         df_today = pd.DataFrame(rows_today)
