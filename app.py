@@ -684,20 +684,49 @@ with tab0:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 @st.cache_data(ttl=60)
 def search_ticker(query: str):
-    """종목명 또는 티커로 후보 목록 반환"""
-    try:
-        results = yf.Search(query, max_results=8).quotes
-        candidates = []
-        for r in results:
-            sym = r.get("symbol", "")
-            name = r.get("longname") or r.get("shortname") or sym
-            exch = r.get("exchDisp", "")
-            type_ = r.get("quoteType", "")
-            if type_ in ("EQUITY", "ETF", "INDEX"):
-                candidates.append({"symbol": sym, "name": name, "exchange": exch, "type": type_})
-        return candidates
-    except Exception:
-        return []
+    """종목명 또는 티커로 후보 목록 반환 (한글: 네이버금융 / 영문: yfinance)"""
+    has_korean = any("가" <= c <= "힣" for c in query)
+    candidates = []
+
+    if has_korean:
+        # 네이버 금융 자동완성 API
+        try:
+            url = f"https://ac.stock.naver.com/ac?q={requests.utils.quote(query)}&target=index,stock,etf"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get(url, headers=headers, timeout=5)
+            data = r.json()
+            for item in data.get("items", [])[:8]:
+                for entry in item:
+                    code = entry.get("code", "")
+                    name = entry.get("name", "")
+                    type_ = entry.get("type", "")
+                    if not code or not name:
+                        continue
+                    # 한국 주식: 숫자 코드 → .KS 붙이기
+                    if code.isdigit():
+                        symbol = code + ".KS"
+                        exch = "KRX"
+                    else:
+                        symbol = code
+                        exch = type_
+                    candidates.append({"symbol": symbol, "name": name, "exchange": exch})
+        except Exception:
+            pass
+    else:
+        # 영문 종목명/티커 → yfinance Search
+        try:
+            results = yf.Search(query, max_results=8).quotes
+            for r in results:
+                sym = r.get("symbol", "")
+                name = r.get("longname") or r.get("shortname") or sym
+                exch = r.get("exchDisp", "")
+                type_ = r.get("quoteType", "")
+                if type_ in ("EQUITY", "ETF", "INDEX"):
+                    candidates.append({"symbol": sym, "name": name, "exchange": exch})
+        except Exception:
+            pass
+
+    return candidates
 
 with tab1:
     st.header("종목 검색 & 차트")
